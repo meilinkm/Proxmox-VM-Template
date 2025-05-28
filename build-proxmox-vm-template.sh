@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # This script will download and modify the desired image to prep for VM template build.
 # The script is inspired by these separate authors work:
@@ -10,118 +10,174 @@
 # This script is designed to be run inside the ProxMox VE host environment.
 # It requires libguestfs-tools to be installed and it will install it, if not present.
 
-echo "Script $0 started."
 echo "This script will create an Ubuntu VM Template for Proxmox."
+
+source variables
 
 # Check for a Proxmox system.
 if ! pveversion &>/dev/null; then
-	echo "This script is intended to run only on Proxmox. Exiting."
-	exit 1
+  echo "This script is intended to run only on Proxmox. Exiting."
+  exit 1
 fi
 
 # Install required packages.
-REQUIRED_PKG=("libguestfs-tools" "wget")
-for pkg in "${REQUIRED_PKG[@]}"; do
-	dpkg -l | grep -q "^ii  ${pkg} "
-        if [ $? -ne 0 ]; then
-		echo "Installing ${pkg}."
-		sudo apt-get update && sudo apt-get -y install ${pgk}
-        fi
+# This script will use the virt-customize command from the libguestfs-tools package.
+# It also uses wget to retrieve cloud images.
+for pkg in "${required_packages[@]}"; do
+  dpkg -l | grep -q "^ii  ${pkg} "
+  if [ $? -ne 0 ]; then
+    echo "Installing ${pkg}."
+    sudo apt-get update && sudo apt-get -y install ${pkg}
+  fi
 done
 
-# Change this line to reflect the VMID you would like to use for the template.
-# Select an ID such as 9999 that will be unique to the node.
-#build_vm_id='ENTER-VMID-FOR-TEMPLATE'
-# The following command will get the next available ID, if you don't care what VMID is allocated:
-build_vm_id=$(pvesh get cluster/nextid)
-
-# Determine the install_dir automatically:
-install_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-
-# SSH key to be used.
-# Comment it out, if you don't want to use it.
-SSH_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCm4/5GC+w/BPIU5fbwT/wAc69PN0/n2SApUQmu5dUBC6PMoFqpgczPhcMNTgj+Z1fcXWdo6Bfu0Sm3q3CVT7la0r4fc/j550kZ7ay7Y4dwxOCw77NSBmTpuessk2+U48oxObxoKdVsLxnle3tgYjbSBIaLcB/LUXzUzQnxMS2ZgEtbJjG0fjvSTG3u+LaVr4ORXIGJWB3vvyxfYOARGA9W8JEviknHbVCOxurEmAQDvVTlcEEpCLDNNexWD7PNW/QEs9aQR59f1NORfPkrf/vXoikPkNh8Pr3jt1JUDY8wgms45SxClO0K62CigSHe5Mw2zoaGijpR6JlFi/Y3dDt6ZCicqechoiEhlCQAr9sIbGLP2nRoKv0y2c6G9Ade0RjRhB+FMp220fcDMdREb5Pzbju1kxZkz76eYwIN/Rs4TTKS1kEDp86tCZbEiqQuBv/EL5vDVtIYVqKApVwfoHOckDAUkTfoo+Wv4rG6iY15ys2LDWMR05XPFUO0NWHuLWk= meilinkm@enemigo"
+# Set the VM ID.
+if [ -z "${build_vm_id}" ]; then
+  # The following command will get the next available ID, if you don't care what VMID is allocated:
+  build_vm_id=$(pvesh get cluster/nextid)
+else
+  # Check if the VM ID is already in use.
+  unset result
+  result=$(pvesh get /cluster/resources --type vm --noborder | grep "qemu/113")
+  if [ ! -z "${result}" ] ; then
+    echo "VM ID ${build_vm_id} is already in use."
+    exit
+  fi
+fi
 
 # Enter the URL for the cloud-init image you would like to use and set the name of the template to be created.
 declare -a dists
-dists+=("Ubuntu 18.04 Bionic Beaver")
-dists+=("Ubuntu 20.04 Focal Fossa")
-dists+=("Ubuntu 22.04 Jammy Jellyfish")
-dists+=("Ubuntu 24.04 Noble Numbat")
+# Determine the last 3 Ubuntu LTS releases automatically.
+IFS=$'\n'
+for aline in $(wget -q -O - https://cloud-images.ubuntu.com/ | grep "LTS" | cut -f4-99 -d'-' | sed "s/daily builds//g" | sed "s/^[[:space:]]*//g" | sort -r | head -3 | sort | sed "s/)//g" | sed "s/(//g") ; do
+  dists+=("${aline}")
+done
 
 echo "Choose an Ubuntu version:"
 
 select version in "${dists[@]}"; do
-        if [ -n "$version" ]; then
-            selected_version="${dists[$REPLY]}"
-            break
-        else
-            echo "Invalid choice. Please select a valid option."
-        fi
-    done
+	if [ -n "$version" ]; then
+		((REPLY--))
+		selected_version="${dists[$REPLY]}"
+		break
+	else
+		echo "Invalid choice. Please select a valid option."
+		exit 1
+	fi
+done
 
 if [ -n "${selected_version}" ]; then
-	DISTRO_CODE_NAME=$(echo "${selected_version}"| awk '{print $3,$4}')
-	DISTRO_SHORT_CODE_NAME=$(echo "${selected_version}"| awk '{print $3}')
-	DISTRO_VERSION=$(echo "${selected_version}"| awk '{print $2}')
-        DISTRO_CLOUD_IMAGE="${DISTRO_SHORT_CODE_NAME,,}-server-cloudimg-amd64.img"
-        CLOUD_IMAGE_URL="https://cloud-images.ubuntu.com/${DISTRO_SHORT_CODE_NAME,,}/current/${DISTRO_CLOUD_IMAGE}"
-        TEMPLATE_NAME_DEFAULT="ubuntu-${DISTRO_VERSION}-${DISTRO_CODE_NAME,,}"
+	distro_code_name=$(echo "${selected_version}"| awk '{print $5,$6}')
+	distro_short_code_name=$(echo "${selected_version}"| awk '{print $5}')
+	distro_version=$(echo "${selected_version}"| awk '{print $3}')
+        distro_cloud_image="${distro_short_code_name,,}-server-cloudimg-amd64.img"
+        cloud_image_url="https://cloud-images.ubuntu.com/${distro_short_code_name,,}/current/${distro_cloud_image}"
+        template_name_default="ubuntu-${distro_version}-${distro_short_code_name,,}"
         echo "Selected Ubuntu version: ${version}"
 else
         echo "Invalid choice, exiting."
-fi
-
-# Enter the additional packages you would like in your template.
-package_list='cloud-init,qemu-guest-agent,curl,wget,vim,iputils-ping,netcat-openbsd'
-
-# What storage location on your PVE node do you want to use for the template? (zfs-mirror, local-lvm, local, etc.)
-storage_location='nfs'
-
-# Get the name server from the Proxmox node.
-# This assumes this is correctly set up on the Proxmox node.
-nameserver=$(grep ^nameserver /etc/resolv.conf | tail -1 | awk '{print $2}')
-
-# Your domain (ie, domain.com, domain.local, domain).
-# This assumes this is correctly set up on the Proxmox node.
-searchdomain=$(grep ^search /etc/resolv.conf | tail -1 | awk '{print $2}')
-
-# Username for accessing the image.
-cloud_init_user='devops'
-
-# Set the SCSI Controller Model.
-scsihw='virtio-scsi-single'
-
-# Memory and CPU cores. These are overridden with VM deployments or through the PVE interface.
-vm_mem='2048'
-vm_cores='1'
-
-# Grab latest cloud image for your selected image.
-echo "Downloading ${CLOUD_IAMGE_URL}."
-wget ${CLOUD_IMAGE_URL}
-
-if [ ! -s ${DISTRO_CLOUD_IMAGE} ] ; then
-	echo "Downloading cloud image ${CLOUD_IMAGE_URL} failed."
 	exit 1
 fi
 
+echo
 
-#UPDATE make sure the template is created in the Templates pool  - eigenlijk nog beter - maak de Templates pool als die niet bestaat
-echo "Packages added at build time: ${package_list}"
-virt-customize --update -a ${DISTRO_CLOUD_IMAGE}
-exit
-virt-customize --install ${package_list} -a ${DISTRO_CLOUD_IMAGE}
-qm create ${build_vm_id} --memory ${vm_mem} --cores ${vm_cores} --net0 virtio,bridge=vmbr0 --name ${template_name}
-qm importdisk ${build_vm_id} ${image_name} ${storage_location}
-qm set ${build_vm_id} --scsihw ${scsihw} --scsi0 ${storage_location}:vm-${build_vm_id}-disk-0
-qm set ${build_vm_id} --ide0 ${storage_location}:cloudinit
-qm set ${build_vm_id} --nameserver ${nameserver} --ostype l26 --searchdomain ${searchdomain} --ciuser ${cloud_init_user}
-if [ ! -z "${SSH_KEY}" ]; then
-    qm set ${build_vm_id} --sshkey <(echo "${SSH_KEY}")
+# Prompt for user-defined variables
+read -p "Enter a VM template name [${template_name_default}]: " template_name
+template_name=${template_name:-$template_name_default}
+
+cloud_user_default="devops" # User for cloud-init
+read -p "Enter a Cloud-Init Username for ${template_name} [${cloud_user_default}]: " cloud_user
+cloud_user=${cloud_user:-$cloud_user_default}
+
+generated_password=$(date +%s | sha256sum | base64 | head -c 16 ; echo) # Random password generation
+cloud_password_default=${generated_password}
+
+read -p "Enter a Cloud-Init Password for ${template_name} [$cloud_password_default]: " cloud_password
+cloud_password=${cloud_password:-$cloud_password_default}
+
+echo
+
+# Required packages to be installed in the VM template
+template_package_list='cloud-init,cloud-utils,cloud-guest-utils,qemu-guest-agent'
+
+# Get the name server from the Proxmox node.
+# This assumes this is correctly set up on the Proxmox node.
+if [ -z "${nameserver}" ] ; then
+  nameserver=$(grep ^nameserver /etc/resolv.conf | tail -1 | awk '{print $2}')
 fi
+
+# Get the searchdomain from the Proxmox node.
+# This assumes this is correctly set up on the Proxmox node.
+if [ -z "${searchdomain}" ] ; then
+  searchdomain=$(grep ^search /etc/resolv.conf | tail -1 | awk '{print $2}')
+fi
+
+# Grab latest cloud image for your selected image.
+echo "Downloading ${cloud_image_url}."
+rm -f ${cloud_image_url}
+wget -q ${cloud_image_url}
+
+if [ ! -s ${distro_cloud_image} ] ; then
+  echo "Downloading cloud image ${cloud_image_url} failed."
+  exit 1
+fi
+
+# Fix random seed warning message from virt-customize.
+echo "Generate random-seed."
+uuid=$(uuidgen)
+mkdir -p /mnt/${uuid}
+guestmount -a ${distro_cloud_image} -i --rw /mnt/${uuid}
+cd /mnt/${uuid}/var/lib/systemd/
+dd if=/dev/urandom of=random-seed bs=512 count=4 >/dev/null 2>&1
+chmod 755 random-seed
+cd - > /dev/null 2>&1
+guestunmount /mnt/${uuid}
+rm -rf /mnt/${uuid}
+
+echo "Adding packages at build time: ${template_package_list}"
+virt-customize --update --install ${template_package_list} -a ${distro_cloud_image}
+if [ ! -z "${template_additional_package_list}" ] ; then
+  echo "Adding additional packages at build time: ${template_additional_package_list}"
+  virt-customize --update --install ${template_additional_package_list} -a ${distro_cloud_image}
+fi
+
+TZ="Europe/Amsterdam"
+echo "Set the timezone to ${TZ}."
+virt-customize -a ${distro_cloud_image} --timezone ${TZ}
+
+# Create VM
+echo "Creating VM ${build_vm_id}."
+qm create ${build_vm_id} --memory ${vm_memory} --cores ${vm_cores} --net0 virtio,bridge=vmbr0 --name ${template_name} --pool Templates
+echo "Importing disk image to storage location ${storage_location}."
+qm importdisk ${build_vm_id} ${distro_cloud_image} ${storage_location} -format qcow2 2>&1 | grep -iv "transferred"
+echo "Set storage target to ${storage_location}:${build_vm_id}/vm-${build_vm_id}-disk-0.qcow2."
+qm set ${build_vm_id} --scsihw virtio-scsi-single --scsi0 ${storage_location}:${build_vm_id}/vm-${build_vm_id}-disk-0.qcow2,iothread=1
+echo "Set OS type to Linux."
+os_type="l26" # OS type (Linux 6x - 2.6 Kernel)
+qm set ${build_vm_id} --ostype ${os_type}
+echo "Define random number generator /dev/urandom."
+qm set ${build_vm_id} --rng0 source=/dev/urandom
+echo "Define cloudinit device."
+qm set ${build_vm_id} --ide0 ${storage_location}:cloudinit
+echo "Configure DNS settings to nameserver ${nameserver}, domain ${searchdomain}."
+qm set ${build_vm_id} --nameserver ${nameserver} --searchdomain ${searchdomain}
+echo "Create user and set password for user ${cloud_user}."
+qm set ${build_vm_id} --ciuser ${cloud_user} --cipassword ${cloud_password}
+if [ ! -z "${ssh_key}" ]; then
+  echo "Configure SSH key."
+  qm set ${build_vm_id} --sshkey <(echo "${ssh_key}")
+fi
+echo "Set boot disk."
 qm set ${build_vm_id} --boot c --bootdisk scsi0
+echo "Enable agent."
 qm set ${build_vm_id} --agent enabled=1
-qm template ${build_vm_id}
+disk_size="32G"
+echo "Resize disk to ${disk_size}."
+qm resize ${build_vm_id} scsi0 ${disk_size}
+echo "Converting VM to template."
+qm template ${build_vm_id} 2>&1 | grep -v chattr
 
 # Deleting image
-rm ${DISTRO_CLOUD_IMAGE}
+rm ${distro_cloud_image}
+
+echo "Done. Template ${build_vm_id} ${template_name} created."
