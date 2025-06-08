@@ -1,10 +1,6 @@
 # Packages to be installed on the Proxmox node.
 required_packages=("libguestfs-tools" "wget")
 
-# SSH key to be used.
-# Comment it out, if you don't want to use it.
-ssh_key="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCm4/5GC+w/BPIU5fbwT/wAc69PN0/n2SApUQmu5dUBC6PMoFqpgczPhcMNTgj+Z1fcXWdo6Bfu0Sm3q3CVT7la0r4fc/j550kZ7ay7Y4dwxOCw77NSBmTpuessk2+U48oxObxoKdVsLxnle3tgYjbSBIaLcB/LUXzUzQnxMS2ZgEtbJjG0fjvSTG3u+LaVr4ORXIGJWB3vvyxfYOARGA9W8JEviknHbVCOxurEmAQDvVTlcEEpCLDNNexWD7PNW/QEs9aQR59f1NORfPkrf/vXoikPkNh8Pr3jt1JUDY8wgms45SxClO0K62CigSHe5Mw2zoaGijpR6JlFi/Y3dDt6ZCicqechoiEhlCQAr9sIbGLP2nRoKv0y2c6G9Ade0RjRhB+FMp220fcDMdREb5Pzbju1kxZkz76eYwIN/Rs4TTKS1kEDp86tCZbEiqQuBv/EL5vDVtIYVqKApVwfoHOckDAUkTfoo+Wv4rG6iY15ys2LDWMR05XPFUO0NWHuLWk= meilinkm@enemigo"
-
 # Change this line to reflect the VMID you would like to use for the template.
 # Select an ID such as 9999 that will be unique to the node.
 # Leave commented out, if you want the script to determine the next available VM ID automatically.
@@ -19,16 +15,25 @@ storage_location='nfs'
 
 # What nameserver is to used?
 # Leave commented out, if you want to use the same nameserver as defined on the Proxmox node.
-#nameserver="192.168.0.1"
+#nameserver_default="192.168.0.1"
 
 # What search domain should be used?
 # Your domain (ie, domain.com, domain.local, domain).
 # Leave commented out, if you want to use the same searchdomain as defined on the Proxmox node.
-#searchdomain="yourdomain.com"
+#searchdomain_default="yourdomain.com"
 
 # Memory and CPU cores to be used for the template.
-vm_memory='2048'
-vm_cores='1'
+vm_memory=2048
+vm_cores=1
 
 # Set the disk size to be used for the template.
 disk_size="32G"
+
+# The default cloud init user to be created.
+cloud_user_default="devops"
+
+# Required packages to be installed in the VM template
+template_package_list='cloud-init,cloud-utils,cloud-guest-utils,qemu-guest-agent'
+
+# Resource pool to use
+default_pool="Templates"
