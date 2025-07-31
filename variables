@@ -6,10 +6,6 @@ required_packages=("libguestfs-tools" "wget")
 # Leave commented out, if you want the script to determine the next available VM ID automatically.
 #build_vm_id='9999'
 
-# Enter the additional packages you would like in your template.
-# Comment out or leave empty if no additional packages are required.
-template_additional_package_list='curl,wget,vim,iputils-ping,netcat-openbsd'
-
 # What storage location on your PVE node do you want to use for the template? (zfs-mirror, local-lvm, local, etc.)
 storage_location='nfs'
 
@@ -23,17 +19,24 @@ storage_location='nfs'
 #searchdomain_default="yourdomain.com"
 
 # Memory and CPU cores to be used for the template.
-vm_memory=2048
-vm_cores=1
+vm_memory=4096
+vm_cores=2
 
-# Set the disk size to be used for the template.
-disk_size="32G"
+# Set the disk size in GB to be used for the template.
+disk_size_default="32"
 
 # The default cloud init user to be created.
 cloud_user_default="devops"
+#cloud_password_default="somepassword"
 
 # Required packages to be installed in the VM template
-template_package_list='cloud-init,cloud-utils,cloud-guest-utils,qemu-guest-agent'
+template_package_list_ubuntu='cloud-init,cloud-utils,cloud-guest-utils,qemu-guest-agent'
+template_package_list_almalinux='cloud-init,qemu-guest-agent'
+
+# Enter the additional packages you would like in your template.
+# Comment out or leave empty if no additional packages are required.
+template_additional_package_list_ubuntu='curl,wget,vim,iputils-ping,netcat-openbsd,bash-completion,unzip'
+template_additional_package_list_almalinux='curl,wget,vim,nmap-ncat,bash-completion,unzip'
 
 # Resource pool to use
 default_pool="Templates"

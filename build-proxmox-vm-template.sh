@@ -2,6 +2,14 @@
 
 # This script will download and modify the desired image and creates a VM Template in Proxmox.
 
+# Author: Michel Meilink
+# Date: July 31, 2025
+# Version 0.2
+
+# Version history:
+# 0.1	May 12, 2025		Initial version to deploy Ubuntu templates in Proxmox.
+# 0.2   July 31, 2025 		Update for AlmaLinux.
+
 # The script is inspired by these separate authors work:
 # - Austins Nerdy Things: https://austinsnerdythings.com/2021/08/30/how-to-create-a-proxmox-ubuntu-cloud-init-image/
 # - What the Server: https://whattheserver.com/proxmox-cloud-init-os-template-creation/
@@ -9,6 +17,7 @@
 # - Modem7: https://github.com/modem7/public_scripts/blob/master/Bash/Proxmox%20Scripts/create-ubuntu-cloud-template.sh
 # - PVE Proxmox qm reference guide: https://pve.proxmox.com/pve-docs/qm.1.html
 # - Dinodem: https://github.com/dinodem/terraform-proxmox/tree/mainhttps://github.com/dinodem/terraform-proxmox/tree/main
+# - https://computingforgeeks.com/creating-rocky-almalinux-centos-os-templates-on-proxmox-ve/
 
 # This script is designed to be run inside the ProxMox VE host environment.
 # It requires libguestfs-tools to be installed and it will install it, if not present.
@@ -101,23 +110,25 @@ done
 print_step "Configuration options"
 
 
-declare -a storages
-IFS=$'\n'
-for line in $(pvesm status | grep active | grep -v ^local | awk '{print $1}') ; do
-  storages+=("${line}")
-done
+if [ -z "${storage_location}" ] ; then
+  declare -a storages
+  IFS=$'\n'
+  for line in $(pvesm status | grep "active" | grep -v "^local" | awk '{print $1}') ; do
+    storages+=("${line}")
+  done
 
-echo "Choose one of the available storages in Proxmox:"
-select storage in "${storages[@]}"; do
-  if [ -n "${storage}" ]; then
-    ((REPLY--))
-    storage_location="${storages[$REPLY]}"
-    break
-  else
-    echo "Invalid choice. Please select a valid option."
-    exit 1
-  fi
-done
+  echo "Choose one of the available storages in Proxmox:"
+  select storage in "${storages[@]}"; do
+    if [ -n "${storage}" ]; then
+      ((REPLY--))
+      storage_location="${storages[$REPLY]}"
+      break
+    else
+      echo "Invalid choice. Please select a valid option."
+      exit 1
+    fi
+  done
+fi
 print_message "Using storage: ${storage_location}"
 
 
@@ -153,12 +164,24 @@ print_message "Using VM ID: ${build_vm_id}"
 declare -a dists
 # Determine the last 3 Ubuntu LTS releases automatically.
 IFS=$'\n'
+# Ubuntu
 for line in $(wget -q -O - https://cloud-images.ubuntu.com/ | grep "LTS" | cut -f4-99 -d'-' | sed "s/daily builds//g" | sed "s/^[[:space:]]*//g" | sort -r | head -3 | sort | sed "s/)//g" | sed "s/(//g") ; do
   dists+=("${line}")
+done
+# Alma Linux
+for line in $(wget -q -O - https://wiki.almalinux.org/cloud/ | tr '<th>' '\n' | grep "AlmaLinux OS [0-99]"); do
+  # The page only displays AlmaLinux 8, 9, 10, etcetera, but no release - grab the release too.
+  unset distro_version distro_version_release
+  distro_version=$(echo "${line}" | awk '{print $NF}')
+  distro_version_release=$(wget -q -O - https://repo.almalinux.org/almalinux/${distro_version}/cloud/x86_64/images/ | grep "AlmaLinux-${distro_version}" | grep "GenericCloud" | tr '-' '\n' | grep "^${distro_version}" | sort -dfu | grep "\.")
+  newline="AlmaLinux OS ${distro_version_release}"
+  unset distro_version distro_version_release
+  dists+=("${newline}")
 done
 
 echo "Choose an OS version:"
 
+COLUMNS=80
 select version in "${dists[@]}"; do
   if [ -n "${version}" ]; then
     ((REPLY--))
@@ -171,13 +194,31 @@ select version in "${dists[@]}"; do
 done
 
 if [ -n "${selected_version}" ]; then
-  distro_code_name=$(echo "${selected_version}"| awk '{print $5,$6}')
-  distro_short_code_name=$(echo "${selected_version}"| awk '{print $5}')
-  distro_version=$(echo "${selected_version}"| awk '{print $3}')
-  distro_cloud_image="${distro_short_code_name,,}-server-cloudimg-amd64.img"
-  cloud_image_url="https://cloud-images.ubuntu.com/${distro_short_code_name,,}/current/${distro_cloud_image}"
-  template_name_default="ubuntu-${distro_version}-${distro_short_code_name,,}"
-  print_message "Using OS version: ${selected_version}"
+  linux_type=$(echo "${selected_version}" | awk '{print $1}')
+  case ${linux_type} in
+    "Ubuntu")
+      distro_code_name=$(echo "${selected_version}" | awk '{print $5,$6}')
+      distro_short_code_name=$(echo "${selected_version}" | awk '{print $5}')
+      distro_version=$(echo "${selected_version}" | awk '{print $3}')
+      distro_cloud_image="${distro_short_code_name,,}-server-cloudimg-amd64.img"
+      cloud_image_url="https://cloud-images.ubuntu.com/${distro_short_code_name,,}/current/${distro_cloud_image}"
+      template_name_default="ubuntu-${distro_version}-${distro_short_code_name,,}"
+      print_message "Using OS version: ${selected_version}"
+      ;;
+    "AlmaLinux")
+      # Cloud images are located at https://repo.almalinux.org/almalinux/<version>/cloud/x86_64/images/AlmaLinux-<version>-GenericCloud-latest.x86_64.qcow2
+      distro_version_release=$(echo "${selected_version}" | awk '{print $3}')
+      distro_version=$(echo "${distro_version_release}" | cut -f1 -d '.')
+      distro_cloud_image="AlmaLinux-${distro_version}-GenericCloud-latest.x86_64.qcow2"
+      cloud_image_url="https://repo.almalinux.org/almalinux/${distro_version}/cloud/x86_64/images/${distro_cloud_image}"
+      template_name_default="almalinux-${distro_version_release}"
+      print_message "Using OS version: AlmaLinux OS ${distro_version_release}"
+      ;;
+    "*")
+      print_error "Invalid OS type: ${linux_type}."
+      exit 1
+      ;;
+  esac
 else
   print_warning "Invalid choice, exiting."
   exit 1
@@ -243,6 +284,21 @@ vm_cores=${user_cores}
 print_message "Using number of cores: ${vm_cores}"
 
 
+# Disk size.
+read -p "Enter the disk size in GB [default: ${disk_size_default}]: " user_disk_size
+user_disk_size=${user_disk_size:-$disk_size_default}
+if ! [[ "${user_disk_size}" =~ ^[0-9]+$ ]] ; then
+  print_warning "Disk size value \"${user_disk_size}\" is not a valid numerical value."
+  exit 1
+fi
+if (( user_disk_size < 10 )) ; then
+  print_warning "The disk size should be at least 10 GB."
+  exit 1
+fi
+disk_size=${user_disk_size}
+print_message "Using disk size: ${disk_size}"
+
+
 # Get default user.
 unset cloud_user
 read -p "Enter a user account [${cloud_user_default}]: " cloud_user
@@ -255,8 +311,10 @@ print_message "Using user name: ${cloud_user}"
 
 
 # Get password for Cloud-Init user.
-generated_password=$(date +%s | sha256sum | base64 | head -c 16 ; echo) # Random password generation
-cloud_password_default=${generated_password}
+if [ -z "${cloud_password_default}" ] ; then
+  generated_password=$(date +%s | sha256sum | base64 | head -c 16 ; echo) # Random password generation
+  cloud_password_default=${generated_password}
+fi
 
 unset cloud_password
 read -p "Enter a password [${cloud_password_default}]: " cloud_password
@@ -304,6 +362,7 @@ print_step "Review configuration"
 
 echo -e "Please review your settings:"
 echo -e "  Storage:          ${YELLOW}${storage_location}${NC}"
+echo -e "  Disk size:        ${YELLOW}${disk_size} GB${NC}"
 echo -e "  VM ID:            ${YELLOW}${build_vm_id}${NC}"
 echo -e "  Template name:    ${YELLOW}${template_name}${NC}"
 echo -e "  OS version:       ${YELLOW}${selected_version}${NC}"
@@ -328,8 +387,8 @@ print_step "Configuring cloud image"
 
 # Grab latest cloud image for your selected image.
 print_message "Downloading ${cloud_image_url}..."
-rm -f ${cloud_image_url}
-wget -q ${cloud_image_url}
+rm -f ${distro_cloud_image}*
+wget ${cloud_image_url}
 check_success "Failed to download the cloud image."
 if [ ! -s ${distro_cloud_image} ] ; then
   print_warning "Downloading cloud image ${cloud_image_url} failed."
@@ -349,15 +408,38 @@ cd - > /dev/null 2>&1
 guestunmount /mnt/${uuid}
 rm -rf /mnt/${uuid}
 
-print_message "Adding packages at build time: ${template_package_list}..."
-virt-customize --update --install ${template_package_list} -a ${distro_cloud_image}
-check_success "Failed to install ${template_package_list}."
-if [ ! -z "${template_additional_package_list}" ] ; then
-  print_message "Adding additional packages at build time: ${template_additional_package_list}"
-  virt-customize --update --install ${template_additional_package_list} -a ${distro_cloud_image}
-  check_success "Failed to install ${template_additional_package_list}."
-fi
 
+# Install required packages.
+case ${linux_type} in
+  "Ubuntu")
+    template_package_list=${template_package_list_ubuntu}
+    ;;
+  "AlmaLinux")
+    template_package_list=${template_package_list_almalinux}
+    ;;
+esac
+print_message "Adding packages at build time: ${template_package_list}..."
+virt-customize --install ${template_package_list} -a ${distro_cloud_image}
+check_success "Failed to install ${template_package_list}."
+
+
+# Install additional packages.
+case ${linux_type} in
+  "Ubuntu")
+    template_additional_package_list=${template_additional_package_list_ubuntu}
+    ;;
+  "AlmaLinux")
+    template_additional_package_list=${template_additional_package_list_almalinux}
+    ;;
+esac
+print_message "Adding additional packages at build time: ${template_additional_package_list}..."
+virt-customize --install ${template_additional_package_list} -a ${distro_cloud_image}
+check_success "Failed to install ${template_additional_package_list}."
+
+
+# Enable qemu-guest-agent.
+print_message "Enabling qemu-guest-agent..."
+virt-customize -a ${distro_cloud_image} --run-command 'systemctl enable qemu-guest-agent'
 
 # Timezone.
 TZ=$(cat /etc/timezone)
@@ -372,21 +454,38 @@ virt-customize -a ${distro_cloud_image} --truncate /etc/machine-id
 check_success "Failed clearing machine ID."
 
 
+# Relabel SELinux.
+case ${linux_type} in
+  "AlmaLinux")
+    print_message "Relabeling SELinux..."
+    virt-customize -a ${distro_cloud_image} --selinux-relabel
+    check_success "Failed to relabel SELinux."
+    ;;
+esac
+
+
 print_step "Creating VM template ${build_vm_id}"
 
 
-# Create VM.
+# Create VM. Set RAM, cores, CPU type, network, template name, resource pool, DHCP.
 print_message "Creating VM..."
-qm create ${build_vm_id} --memory ${vm_memory} --cores ${vm_cores} --net0 virtio,bridge=vmbr0 --name ${template_name} --pool ${default_pool} --ipconfig0 ip=dhcp
+bridge=$(brctl show | grep vmbr | awk '{print $1}')
+qm create ${build_vm_id} --memory ${vm_memory} --cores ${vm_cores} --cpu cputype=host --net0 virtio,bridge=${bridge} --name ${template_name} --pool ${default_pool} --ipconfig0 ip=dhcp
 check_success "Failed to create VM."
 
+# Import the disk.
 print_message "Importing disk image to storage location ${storage_location}..."
 qm importdisk ${build_vm_id} ${distro_cloud_image} ${storage_location} -format qcow2 2>&1 | grep -iv "transferred"
 check_success "Failed to import disk image."
 
+# Set scsi controller; virtio-scsi-single allocates a single controller for each disk (where virtio-scsi-pci adds 1 controller for up to 16 disks).
 print_message "Setting storage target to ${storage_location}:${build_vm_id}/vm-${build_vm_id}-disk-0.qcow2..."
 qm set ${build_vm_id} --scsihw virtio-scsi-single --scsi0 ${storage_location}:${build_vm_id}/vm-${build_vm_id}-disk-0.qcow2,iothread=1
-check_success "Failed to configure disk."
+check_success "Failed to attach disk."
+
+print_message "Setting boot disk..."
+qm set ${build_vm_id} --boot c --bootdisk scsi0
+check_success "Failed to configure boot disk."
 
 print_message "Setting OS type to Linux..."
 os_type="l26" # OS type (Linux 6x - 2.6 Kernel)
@@ -397,6 +496,7 @@ print_message "Defining random number generator /dev/urandom..."
 qm set ${build_vm_id} --rng0 source=/dev/urandom
 check_success "Failed to define random number generator."
 
+# For cloudinit images, it is required to configure a serial console and use it as a display.
 print_message "Configuring serial console..."
 qm set ${build_vm_id} --serial0 socket --vga serial0
 check_success "Failed to configure serial console."
@@ -417,18 +517,20 @@ print_message "Configuring SSH keys..."
 qm set ${build_vm_id} --ciuser ${cloud_user} --sshkeys keyfile
 check_success "Failed to configure SSH keys."
 
-print_message "Setting boot disk..."
-qm set ${build_vm_id} --boot c --bootdisk scsi0
-check_success "Failed to configure boot disk."
-
+# Enable communication with the QEMU Guest Agent and its properties.
 print_message "Enabling agent..."
 qm set ${build_vm_id} --agent enabled=1
 check_success "Failed to enable qemu-guest-agent."
 
-disk_size="32G"
-print_message "Resizing disk to ${disk_size}..."
-qm resize ${build_vm_id} scsi0 ${disk_size}
+print_message "Resizing disk to ${disk_size}G..."
+qm resize ${build_vm_id} scsi0 ${disk_size}G
 check_success "Failed to resize disk."
+
+# Doing an auto-upgrade at boot may take a long time. Disable it.
+# A user can always do upgrades later on.
+print_message "Disable auto-upgrade at first boot..."
+qm set ${build_vm_id} --ciupgrade 0 # default is 1
+check_success "Failed to disable auto-upgrade at first boot."
 
 print_message "Converting VM to template..."
 qm template ${build_vm_id} 2>&1 | grep -v chattr
