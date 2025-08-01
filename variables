@@ -23,7 +23,7 @@ vm_memory=4096
 vm_cores=2
 
 # Set the disk size in GB to be used for the template.
-disk_size_default="32"
+disk_size_default="40"
 
 # The default cloud init user to be created.
 cloud_user_default="devops"

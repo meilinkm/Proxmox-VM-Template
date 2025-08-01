@@ -9,6 +9,7 @@
 # Version history:
 # 0.1	May 12, 2025		Initial version to deploy Ubuntu templates in Proxmox.
 # 0.2   July 31, 2025 		Update for AlmaLinux.
+# 0.3   August 1, 2025		Update for Rocky Linux, Oracle Linux and CentOS Stream.
 
 # The script is inspired by these separate authors work:
 # - Austins Nerdy Things: https://austinsnerdythings.com/2021/08/30/how-to-create-a-proxmox-ubuntu-cloud-init-image/
@@ -60,9 +61,9 @@ check_success() {
 # Main
 
 clear
-echo -e "${GREEN}=====================================${NC}"
-echo -e "${GREEN}   Proxmox Template Creator Script   ${NC}"
-echo -e "${GREEN}=====================================${NC}"
+echo -e "${GREEN}=============================${NC}"
+echo -e "${GREEN}   Proxmox Template Wizard   ${NC}"
+echo -e "${GREEN}=============================${NC}"
 echo -e "\nThis script will help you create a VM template on your Proxmox server."
 echo -e "You will be prompted for some configuration options."
 
@@ -160,24 +161,62 @@ fi
 print_message "Using VM ID: ${build_vm_id}"
 
 
-# Choose OS version.
+# Choose OS version. Get last 3 releases of each distribution.
 declare -a dists
-# Determine the last 3 Ubuntu LTS releases automatically.
+# Ubuntu
 IFS=$'\n'
 # Ubuntu
-for line in $(wget -q -O - https://cloud-images.ubuntu.com/ | grep "LTS" | cut -f4-99 -d'-' | sed "s/daily builds//g" | sed "s/^[[:space:]]*//g" | sort -r | head -3 | sort | sed "s/)//g" | sed "s/(//g") ; do
+print_message "Retrieving Ubuntu releases..." 
+for line in $(wget -q -O - https://cloud-images.ubuntu.com/ | grep "LTS" | cut -f4-99 -d'-' | sed "s/daily builds//g" | sed "s/^[[:space:]]*//g" | sort -r | cut -f1 -d'[' | head -3 | sort | sed "s/)//g" | sed "s/(//g") ; do
   dists+=("${line}")
 done
 # Alma Linux
-for line in $(wget -q -O - https://wiki.almalinux.org/cloud/ | tr '<th>' '\n' | grep "AlmaLinux OS [0-99]"); do
+print_message "Retrieving AlmaLinux releases..." 
+for line in $(wget -q -O - https://wiki.almalinux.org/cloud/ | tr '<th>' '\n' | grep "AlmaLinux OS [0-99]") ; do
   # The page only displays AlmaLinux 8, 9, 10, etcetera, but no release - grab the release too.
   unset distro_version distro_version_release
   distro_version=$(echo "${line}" | awk '{print $NF}')
-  distro_version_release=$(wget -q -O - https://repo.almalinux.org/almalinux/${distro_version}/cloud/x86_64/images/ | grep "AlmaLinux-${distro_version}" | grep "GenericCloud" | tr '-' '\n' | grep "^${distro_version}" | sort -dfu | grep "\.")
+  distro_version_release=$(wget -q -O - https://repo.almalinux.org/almalinux/${distro_version}/cloud/x86_64/images/ | grep "AlmaLinux-${distro_version}" | grep "GenericCloud" | tr '-' '\n' | grep "^${distro_version}" | sort -dfu | grep "\." | head -3)
   newline="AlmaLinux OS ${distro_version_release}"
   unset distro_version distro_version_release
   dists+=("${newline}")
 done
+# Rocky Linux
+print_message "Retrieving Rocky Linux releases..." 
+for line in $(wget -q -O - https://dl.rockylinux.org/pub/rocky/ | grep href | cut -f2 -d'"' | grep "^[0-9]" | grep '\.' | sed "s/\///g" | sort -V | awk -F. '{ key = $1; if (!(key in v) || $2+0 > v[key]+0) v[key] = $2 } END { for (i in v) print i "." v[i] }' | sort -V | head -3) ; do
+  dists+=("Rocky Linux ${line}")
+done
+# Oracle Linux
+print_message "Retrieving Oracle Linux releases..." 
+# Oracle is annoying - they generate an HTML page based on JSON input, and thus it makes it difficult to scrape the cloud images.
+# - Grab https://yum.oracle.com/oracle-linux-templates.html, and get json from source.
+#   e.g.: wget -q -O - https://yum.oracle.com/oracle-linux-templates.html | grep json | grep -v aarch64 | cut -f2 -d "'"
+#   templates/OracleLinux/ol7-template.json
+#   templates/OracleLinux/ol8-template.json
+#   templates/OracleLinux/ol9-template.json
+# - For each json, get base_url:
+#   wget -q -O - https://yum.oracle.com/templates/OracleLinux/ol9-template.json | grep -i base_url | cut -f4 -d'"'
+#   /templates/OracleLinux/OL9/u5/x86_64
+#   This base url gets you the version and release: OL9/u5 = 9.5
+# - Get qcow2 file as well:
+#   wget -q -O - https://yum.oracle.com/templates/OracleLinux/ol9-template.json | grep -i qcow2 | cut -f4 -d'"'
+#   OL9U5_x86_64-kvm-b259.qcow2
+# - Construct url: "https://yum.oracle.com"+<base_url>+"/"+<qcow2>"
+# - Do a wget of that image file.
+for line in $(wget -q -O - https://yum.oracle.com/oracle-linux-templates.html | grep json | grep -v aarch64 | cut -f2 -d "'" | head -3) ; do
+  oracle_linux_version=$(wget -q -O - https://yum.oracle.com/${line} | grep 'version":' | cut -f4 -d'"') 
+  oracle_linux_release=$(wget -q -O - https://yum.oracle.com/${line} | grep 'release":' | cut -f4 -d'"') 
+  dists+=("Oracle Linux ${oracle_linux_version}.${oracle_linux_release}")
+done
+# CentOS Stream
+print_message "Retrieving CentOS Stream releases..." 
+# - Get stream versions: wget -q -O - https://cloud.centos.org/centos/ | grep "\-stream" | grep -v danger | cut -f12 -d'"' | sed "s/\///g"
+#   e.g. "stream-9" - version = 9
+# - Then wget image at https://cloud.centos.org/centos/<stream_version>/x86_64/images/CentOS-Stream-GenericCloud-<version>-latest.x86_64.qcow2
+for line in $(wget -q -O - https://cloud.centos.org/centos/ | grep "\-stream" | grep -v danger | cut -f12 -d'"' | sed "s/\///g" | sed "s/stream/Stream/g" | head -3); do
+  dists+=("CentOS ${line}")
+done
+  
 
 echo "Choose an OS version:"
 
@@ -213,6 +252,32 @@ if [ -n "${selected_version}" ]; then
       cloud_image_url="https://repo.almalinux.org/almalinux/${distro_version}/cloud/x86_64/images/${distro_cloud_image}"
       template_name_default="almalinux-${distro_version_release}"
       print_message "Using OS version: AlmaLinux OS ${distro_version_release}"
+      ;;
+    "Rocky")
+      # Cloud images are located at https://dl.rockylinux.org/pub/rocky/<version>/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
+      distro_version_release=$(echo "${selected_version}" | awk '{print $3}')
+      distro_version=$(echo "${distro_version_release}" | cut -f1 -d '.')
+      distro_cloud_image="Rocky-${distro_version}-GenericCloud-Base.latest.x86_64.qcow2"
+      cloud_image_url="https://dl.rockylinux.org/pub/rocky/${distro_version}/images/x86_64/${distro_cloud_image}"
+      template_name_default="rockylinux-${distro_version_release}"
+      print_message "Using OS version: Rocky Linux ${distro_version_release}"
+      ;;
+    "Oracle")
+      distro_version_release=$(echo "${selected_version}" | awk '{print $3}')
+      distro_version=$(echo "${distro_version_release}" | cut -f1 -d '.')
+      distro_release=$(echo "${distro_version_release}" | cut -f2 -d '.')
+      distro_cloud_image=$(wget -q -O - https://yum.oracle.com/templates/OracleLinux/ol${distro_version}-template.json | grep 'qcow2' | cut -f4 -d'"') 
+      oracle_linux_base_url=$(wget -q -O - https://yum.oracle.com/templates/OracleLinux/ol${distro_version}-template.json | grep 'base_url' | cut -f4 -d'"') 
+      cloud_image_url="https://yum.oracle.com${oracle_linux_base_url}/${distro_cloud_image}" 
+      template_name_default="oraclelinux-${distro_version_release}"
+      print_message "Using OS version: Oracle Linux ${distro_version_release}"
+      ;;
+    "CentOS")
+      distro_version=$(echo "${selected_version}" | awk '{print $2}' | cut -f1 -d'-')
+      distro_cloud_image="CentOS-Stream-GenericCloud-${distro_version}-latest.x86_64.qcow2" 
+      cloud_image_url="https://cloud.centos.org/centos/${distro_version}-stream/x86_64/images/${distro_cloud_image}" 
+      template_name_default="centos-${distro_version}-stream"
+      print_message "Using OS version: CentOS ${distro_version}-Stream"
       ;;
     "*")
       print_error "Invalid OS type: ${linux_type}."
@@ -291,8 +356,8 @@ if ! [[ "${user_disk_size}" =~ ^[0-9]+$ ]] ; then
   print_warning "Disk size value \"${user_disk_size}\" is not a valid numerical value."
   exit 1
 fi
-if (( user_disk_size < 10 )) ; then
-  print_warning "The disk size should be at least 10 GB."
+if (( user_disk_size < 40 )) ; then
+  print_warning "The disk size should be at least 40 GB."
   exit 1
 fi
 disk_size=${user_disk_size}
@@ -388,7 +453,7 @@ print_step "Configuring cloud image"
 # Grab latest cloud image for your selected image.
 print_message "Downloading ${cloud_image_url}..."
 rm -f ${distro_cloud_image}*
-wget ${cloud_image_url}
+wget -q --show-progress ${cloud_image_url}
 check_success "Failed to download the cloud image."
 if [ ! -s ${distro_cloud_image} ] ; then
   print_warning "Downloading cloud image ${cloud_image_url} failed."
@@ -409,12 +474,25 @@ guestunmount /mnt/${uuid}
 rm -rf /mnt/${uuid}
 
 
+# Fix repo mirror for CentOS Stream 8.
+# Repo has changed since CentOS Stream 8 is no longer supported.
+case ${linux_type} in
+  "CentOS")
+    print_message "Fix repo URL..."
+    virt-customize -a ${distro_cloud_image} --run-command 'sed -i "s/mirrorlist=/#mirrorlist=/g" /etc/yum.repos.d/CentOS-*.repo'
+    check_success "Failed to fix repo."
+    virt-customize -a ${distro_cloud_image} --run-command 'sed -i "s/^#baseurl=http:\/\/mirror.centos.org/baseurl=http:\/\/vault.centos.org/g" /etc/yum.repos.d/CentOS-*.repo'
+    check_success "Failed to fix repo."
+    ;;
+esac
+
+
 # Install required packages.
 case ${linux_type} in
   "Ubuntu")
     template_package_list=${template_package_list_ubuntu}
     ;;
-  "AlmaLinux")
+  "AlmaLinux"|"Rocky"|"Oracle"|"CentOS")
     template_package_list=${template_package_list_almalinux}
     ;;
 esac
@@ -428,7 +506,7 @@ case ${linux_type} in
   "Ubuntu")
     template_additional_package_list=${template_additional_package_list_ubuntu}
     ;;
-  "AlmaLinux")
+  "AlmaLinux"|"Rocky"|"Oracle"|"CentOS")
     template_additional_package_list=${template_additional_package_list_almalinux}
     ;;
 esac
@@ -440,6 +518,7 @@ check_success "Failed to install ${template_additional_package_list}."
 # Enable qemu-guest-agent.
 print_message "Enabling qemu-guest-agent..."
 virt-customize -a ${distro_cloud_image} --run-command 'systemctl enable qemu-guest-agent'
+
 
 # Timezone.
 TZ=$(cat /etc/timezone)
@@ -456,7 +535,7 @@ check_success "Failed clearing machine ID."
 
 # Relabel SELinux.
 case ${linux_type} in
-  "AlmaLinux")
+  "AlmaLinux"|"Rocky"|"Oracle"|"CentOS")
     print_message "Relabeling SELinux..."
     virt-customize -a ${distro_cloud_image} --selinux-relabel
     check_success "Failed to relabel SELinux."
@@ -497,9 +576,14 @@ qm set ${build_vm_id} --rng0 source=/dev/urandom
 check_success "Failed to define random number generator."
 
 # For cloudinit images, it is required to configure a serial console and use it as a display.
-print_message "Configuring serial console..."
-qm set ${build_vm_id} --serial0 socket --vga serial0
-check_success "Failed to configure serial console."
+#print_message "Configuring serial console..."
+#qm set ${build_vm_id} --serial0 socket --vga serial0
+#check_success "Failed to configure serial console."
+
+# Set the display to VirtIO-GPU
+print_message "Configuring display..."
+qm set ${build_vm_id} --vga virtio
+check_success "Failed to configure display."
 
 print_message "Defining cloudinit device..."
 qm set ${build_vm_id} --ide0 ${storage_location}:cloudinit
